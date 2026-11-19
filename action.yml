@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: 2026 The Open Kannada Authors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+name: Kannada font health
+description: Shape 2,146 Kannada test strings in your fonts with HarfBuzz and run Shaperglot's kn_Knda checks.
+branding:
+  icon: type
+  color: orange
+
+inputs:
+  fonts:
+    description: Font files or glob patterns (TTF, OTF, TTC), separated by spaces or new lines.
+    required: true
+  fail-on:
+    description: >-
+      fontqa failure kinds that fail the check: missing_glyph, notdef, dotted_circle,
+      no_conjunct, no_arkavattu, collision, indistinct.
+    default: missing_glyph notdef dotted_circle no_conjunct no_arkavattu
+  baseline:
+    description: A report from an earlier run. Failures listed there are known and do not fail the check.
+    default: ""
+  allow-missing:
+    description: Code points a font may lack, such as U+0CDC, for both fontqa and Shaperglot.
+    default: ""
+  shaperglot:
+    description: Run Shaperglot's kn_Knda language checks too.
+    default: "true"
+  report:
+    description: Where to write the JSON report.
+    default: font-health/report.json
+  proofs:
+    description: A folder for 1 proof sheet per face, showing the failing strings. Empty for none.
+    default: ""
+  kannadi-ref:
+    description: The commit of openkannada/kannadi whose fontqa is used.
+    default: 54200595f5c1cded6455dcbf691f0f5340f75586
+  shaperglot-version:
+    description: The Shaperglot version on PyPI.
+    default: 1.2.2
+
+outputs:
+  report:
+    description: Path of the JSON report.
+    value: ${{ inputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v10.3.3
+      with:
+        version: "0.12.17"
+
+    - name: Get fontqa
+      id: fontqa
+      shell: bash
+      env:
+        REF: ${{ inputs.kannadi-ref }}
+      run: |
+        dir="$RUNNER_TEMP/font-health-kannadi"
+        rm -rf "$dir" && mkdir -p "$dir" && cd "$dir"
+        git init -q
+        git remote add origin https://github.com/openkannada/kannadi.git
+        git sparse-checkout set tools/fontqa
+        git fetch -q --depth 1 origin "$REF"
+        git checkout -q FETCH_HEAD
+        uv sync -q --locked --no-dev --project "$dir/tools/fontqa"
+        echo "project=$dir/tools/fontqa" >> "$GITHUB_OUTPUT"
+        echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "files=$RUNNER_TEMP/font-health-files.txt" >> "$GITHUB_OUTPUT"
+
+    # Inputs reach Python as single arguments; it splits them on spaces, new lines and commas.
+    - name: Shape the test strings
+      shell: bash
+      env:
+        PROJECT: ${{ steps.fontqa.outputs.project }}
+        FONTQA_REF: ${{ steps.fontqa.outputs.ref }}
+        FILES: ${{ steps.fontqa.outputs.files }}
+        FONTS: ${{ inputs.fonts }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        BASELINE: ${{ inputs.baseline }}
+        ALLOW: ${{ inputs.allow-missing }}
+        REPORT: ${{ inputs.report }}
+        PROOFS: ${{ inputs.proofs }}
+      run: |
+        args=(--report "$REPORT" --summary "$GITHUB_STEP_SUMMARY" --fontqa-ref "$FONTQA_REF")
+        args+=(--kannada-files "$FILES" --fail-on "$FAIL_ON" --allow-missing "$ALLOW")
+        if [[ -n "$BASELINE" ]]; then args+=(--baseline "$BASELINE"); fi
+        if [[ -n "$PROOFS" ]]; then mkdir -p "$PROOFS"; args+=(--proofs "$PROOFS"); fi
+        uv run -q --project "$PROJECT" --no-dev python "$GITHUB_ACTION_PATH/health.py" "$FONTS" "${args[@]}"
+
+    - name: Run Shaperglot
+      if: ${{ !cancelled() && inputs.shaperglot == 'true' && steps.fontqa.outcome == 'success' }}
+      shell: bash
+      env:
+        FILES: ${{ steps.fontqa.outputs.files }}
+        ALLOW: ${{ inputs.allow-missing }}
+        VERSION: ${{ inputs.shaperglot-version }}
+      run: |
+        if [[ ! -s "$FILES" ]]; then
+          echo "No Kannada font was found, so Shaperglot did not run."
+          exit 1
+        fi
+        status=0
+        echo "## Shaperglot kn_Knda" >> "$GITHUB_STEP_SUMMARY"
+        while IFS= read -r font; do
+          if [[ "$font" == *.ttc || "$font" == *.otc ]]; then
+            echo "$font: skipped, Shaperglot reads single fonts only"
+            printf -- '- `%s`: skipped, a font collection\n' "$font" >> "$GITHUB_STEP_SUMMARY"
+            continue
+          fi
+          if out=$(uvx -q --from "shaperglot==$VERSION" python "$GITHUB_ACTION_PATH/shaperglot_gate.py" "$font" "$ALLOW"); then
+            mark=pass
+          else
+            mark=fail
+            status=1
+          fi
+          echo "$font: $out"
+          printf -- '- `%s` (%s): %s\n' "$font" "$mark" "$(head -1 <<< "$out")" >> "$GITHUB_STEP_SUMMARY"
+        done < "$FILES"
+        exit "$status"

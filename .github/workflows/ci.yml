@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - run: .github/scripts/dco.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+
+  lint-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.12.17"
+      - run: uvx reuse@6.3.0 lint
+      - run: uvx ruff@0.17.5 check .
+      - run: uvx ruff@0.17.5 format --check .
+      - run: uv run --no-project --python 3.12 --with pytest==9.2.0 python -m pytest -q tests
+
+  # Runs the action on Gari, an OFL Kannada font with known gaps.
+  self-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: openkannada/gari-font
+          ref: 381085c1561a60104d39b882934f7bdf901287d4
+          path: gari
+          sparse-checkout: Gari.ttf
+          sparse-checkout-cone-mode: false
+      - name: Known gaps pass with a baseline, with lists written as blocks
+        uses: ./
+        with:
+          fonts: |
+            gari/*.ttf
+          baseline: tests/data/gari-baseline.json
+          fail-on: |
+            missing_glyph
+            notdef, dotted_circle
+            no_conjunct
+            no_arkavattu
+          allow-missing: |
+            U+0CBC
+            u+0cbd
+          report: out/with-baseline.json
+      - name: The same gaps fail without one
+        id: without
+        continue-on-error: true
+        uses: ./
+        with:
+          fonts: gari/Gari.ttf
+          shaperglot: "false"
+          report: out/without-baseline.json
+      - name: Check the outcomes
+        env:
+          OUTCOME: ${{ steps.without.outcome }}
+        run: |
+          test "$OUTCOME" = failure
+          python3 -c "import json,sys; r=json.load(open('out/without-baseline.json')); sys.exit(0 if r['new'] else 1)"
+          python3 -c "import json,sys; r=json.load(open('out/with-baseline.json')); sys.exit(0 if not r['new'] else 1)"

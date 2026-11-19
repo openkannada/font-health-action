@@ -29,7 +29,10 @@ inputs:
     default: font-health/report.json
   proofs:
     description: A folder for 1 proof sheet per face, showing the failing strings. Empty for none.
-    default: ""
+    default: font-health/proofs
+  artifact:
+    description: Name of the artifact that holds the report and the proof sheets. Empty for none.
+    default: font-health
   kannadi-ref:
     description: The commit of openkannada/kannadi whose fontqa is used.
     default: 54200595f5c1cded6455dcbf691f0f5340f75586
@@ -117,3 +120,13 @@ runs:
           printf -- '- `%s` (%s): %s\n' "$font" "$mark" "$(head -1 <<< "$out")" >> "$GITHUB_STEP_SUMMARY"
         done < "$FILES"
         exit "$status"
+
+    - name: Keep the report and proof sheets
+      if: ${{ !cancelled() && inputs.artifact != '' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact }}
+        path: |
+          ${{ inputs.report }}
+          ${{ inputs.proofs }}
+        if-no-files-found: ignore

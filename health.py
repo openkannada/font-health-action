@@ -17,6 +17,7 @@ import argparse
 import glob
 import json
 import sys
+import unicodedata
 from pathlib import Path
 
 FAILURES = (
@@ -56,7 +57,8 @@ def parse_kinds(items: list[str]) -> list[str]:
 def expand(patterns: list[str]) -> list[Path]:
     paths: list[Path] = []
     for token in [t for p in patterns for t in p.split()]:
-        matches = sorted(glob.glob(token, recursive=True))
+        # A file that exists is taken as named: variable fonts are often called Foo[wght].ttf.
+        matches = [token] if Path(token).is_file() else sorted(glob.glob(token, recursive=True))
         if not matches:
             raise UsageError(f"{token} matches no file")
         paths += [Path(m) for m in matches if Path(m).is_file()]
@@ -72,6 +74,78 @@ def face_failures(results, allowed_missing: set[int]) -> dict[str, list[str]]:
                 continue
             out.setdefault(kind, []).append(r.case.id)
     return {k: sorted(v) for k, v in sorted(out.items())}
+
+
+def face_details(results, allowed_missing: set[int]) -> dict[str, dict]:
+    """What went wrong in each failing case: missing code points, the strings it is drawn
+    like, and the glyphs that collide."""
+    out: dict[str, dict] = {}
+    for r in results:
+        detail = {}
+        missing = [f"U+{c:04X}" for c in r.missing if c not in allowed_missing]
+        if missing:
+            detail["missing"] = missing
+        if r.same_as:
+            detail["same_as"] = sorted(r.same_as)
+        if r.collisions:
+            detail["collisions"] = [[c.a, c.b, round(c.share, 3)] for c in r.collisions]
+        if detail:
+            out[r.case.id] = detail
+    return out
+
+
+# Names Python's Unicode data may not know yet.
+NAMES = {0x0CDC: "KANNADA ARCHAIC SHRII", 0x0CDD: "KANNADA LETTER NAKAARA POLLU",
+         0x0CF3: "KANNADA SIGN COMBINING ANUSVARA ABOVE RIGHT"}  # fmt: skip
+
+
+def char_name(code: str) -> str:
+    cp = int(code[2:], 16)
+    return f"{code} {NAMES.get(cp) or unicodedata.name(chr(cp), '')}".strip()
+
+
+def explain(kind: str, case: str, report: dict, face: str) -> str:
+    """1 failure in plain words: the string, what a correct font does, what this one did."""
+    text = report["texts"].get(case, "")
+    detail = report["faces"][face].get("details", {}).get(case, {})
+    shown = f"{text} (`{case}`)"
+    if kind == "missing_glyph":
+        names = ", ".join(char_name(c) for c in detail.get("missing", [])) or "a character"
+        return f"{shown}: the font has no glyph for {names}."
+    if kind == "no_conjunct":
+        return (
+            f"{shown}: the consonant after the virama should be drawn as a subscript; "
+            "the font draws the same glyphs as with a ZWNJ, a visible virama and 2 letters."
+        )
+    if kind == "no_arkavattu":
+        return (
+            f"{shown}: ರ with a virama before a consonant should become the arkavattu; "
+            "the font keeps ರ as a full letter, with a visible virama or the consonant below it."
+        )
+    if kind == "dotted_circle":
+        return f"{shown}: the shaper could not attach a sign and drew a dotted circle."
+    if kind == "notdef":
+        return (
+            f"{shown}: the shaped text holds the .notdef glyph, though every character is mapped."
+        )
+    if kind == "collision":
+        parts = [f"{a} and {b} by {share:.0%}" for a, b, share in detail.get("collisions", [])]
+        return f"{shown}: glyphs overlap ({'; '.join(parts) or 'see the proof sheet'})."
+    if kind == "indistinct":
+        others = ", ".join(report["texts"].get(o, o) for o in detail.get("same_as", []))
+        return f"{shown}: drawn with exactly the same ink as {others or 'another string'}."
+    return f"{shown}: {kind}."
+
+
+KIND_WORDS = {
+    "missing_glyph": "missing characters",
+    "notdef": ".notdef glyphs",
+    "dotted_circle": "dotted circles",
+    "no_conjunct": "no conjunct",
+    "no_arkavattu": "no arkavattu",
+    "collision": "collisions",
+    "indistinct": "strings drawn alike",
+}
 
 
 def compare(report: dict, baseline: dict | None, fail_on: set[str]) -> dict:
@@ -97,26 +171,95 @@ def compare(report: dict, baseline: dict | None, fail_on: set[str]) -> dict:
     return {"new": new, "fixed": fixed}
 
 
+ORDER = (
+    "dotted_circle",
+    "notdef",
+    "no_conjunct",
+    "no_arkavattu",
+    "missing_glyph",
+    "collision",
+    "indistinct",
+)
+MEANING = {
+    "dotted_circle": "the shaper could not attach a sign and drew a dotted circle.",
+    "notdef": "the shaped text holds the .notdef glyph, though every character is mapped.",
+    "no_conjunct": "the consonant after the virama should be drawn as a subscript (ottu); "
+    "the font draws the same glyphs as with a ZWNJ: a visible virama and 2 letters.",
+    "no_arkavattu": "ರ with a virama before a consonant should become the arkavattu; "
+    "the font keeps ರ as a full letter, with a visible virama or the consonant below it.",
+    "collision": "a mark overlaps another glyph by more than 3% of the smaller glyph's ink.",
+    "indistinct": "the string is drawn with exactly the same ink as a different string.",
+}
+EXAMPLES = 6
+
+
+def example(kind: str, case: str, report: dict, face: str) -> str:
+    """1 failing string, with what is specific to it."""
+    text = report["texts"].get(case, "")
+    detail = report["faces"][face].get("details", {}).get(case, {})
+    if kind == "collision" and detail.get("collisions"):
+        parts = "; ".join(f"{a} and {b} by {share:.0%}" for a, b, share in detail["collisions"])
+        return f"{text} (`{case}`): {parts}"
+    if kind == "indistinct" and detail.get("same_as"):
+        others = ", ".join(report["texts"].get(o, o) for o in detail["same_as"])
+        return f"{text} (`{case}`) is drawn like {others}"
+    return f"{text} (`{case}`)"
+
+
+def new_failures(report: dict, face: str, kinds: dict[str, list[str]], shown: int) -> list[str]:
+    """1 paragraph per failure kind: what it means, how many strings, and examples."""
+    out = []
+    details = report["faces"][face].get("details", {})
+    for kind in sorted(kinds, key=ORDER.index):
+        cases = kinds[kind]
+        title = f"**{KIND_WORDS[kind].capitalize()}, {len(cases)} strings.**"
+        if kind == "missing_glyph":
+            by_char: dict[str, list[str]] = {}
+            for case in cases:
+                for code in details.get(case, {}).get("missing", []):
+                    by_char.setdefault(code, []).append(case)
+            out.append(f"{title} The font has no glyph for:")
+            for code, where in sorted(by_char.items(), key=lambda kv: -len(kv[1]))[:shown]:
+                sample = report["texts"].get(where[0], "")
+                n = f"{len(where)} string" + ("s" if len(where) > 1 else "")
+                out.append(f"- {char_name(code)}, needed by {n} such as {sample}")
+        else:
+            out.append(f"{title} In each, {MEANING[kind]}")
+            out += [
+                f"- {example(kind, case, report, face)}" for case in cases[: min(shown, EXAMPLES)]
+            ]
+            if len(cases) > EXAMPLES:
+                out.append(
+                    f"- and {len(cases) - EXAMPLES} more, in the JSON report and the proof sheet"
+                )
+        out.append("")
+    return out
+
+
 def summary_markdown(report: dict, diff: dict, shown: int = SHOWN) -> str:
     lines = ["## Kannada font health", ""]
     lines.append(
-        f"{report['cases']} test strings from kannadi fontqa at `{report['fontqa'][:12]}`. "
-        f"Failing on: {', '.join(report['fail_on']) or 'nothing'}."
+        f"{report['cases']} Kannada test strings shaped with HarfBuzz (kannadi fontqa "
+        f"`{report['fontqa'][:12]}`). The check fails on: "
+        f"{', '.join(KIND_WORDS[k] for k in report['fail_on']) or 'nothing'}."
     )
-    header = "| Face | " + " | ".join(FAILURES) + " | New |"
-    lines += ["", header, "|---" * (len(FAILURES) + 2) + "|"]
+    lines += [
+        "",
+        "| Face | Result | New failures | Known failures | Other findings |",
+        "|---|---|---:|---:|---|",
+    ]
     for face, entry in report["faces"].items():
-        counts = [str(len(entry["failures"].get(k, []))) for k in FAILURES]
         added = sum(len(v) for v in diff["new"].get(face, {}).values())
-        lines.append(f"| `{face}` | " + " | ".join(counts) + f" | {added} |")
+        failing = sum(len(entry["failures"].get(k, [])) for k in report["fail_on"])
+        others = ", ".join(
+            f"{len(entry['failures'][k])} {KIND_WORDS[k]}"
+            for k in FAILURES if k not in report["fail_on"] and entry["failures"].get(k)
+        ) or "none"  # fmt: skip
+        result = "fail" if added else "pass"
+        lines.append(f"| `{face}` | {result} | {added} | {failing - added} | {others} |")
     for face, kinds in diff["new"].items():
         lines += ["", f"### New failures in `{face}`", ""]
-        listed = [(kind, case) for kind, cases in kinds.items() for case in cases]
-        for kind, case in listed[:shown]:
-            text = report["texts"].get(case, "")
-            lines.append(f"- {kind}: `{case}` {text}")
-        if len(listed) > shown:
-            lines.append(f"- and {len(listed) - shown} more in the JSON report")
+        lines += new_failures(report, face, kinds, shown)
     if diff["fixed"]:
         count = sum(len(c) for kinds in diff["fixed"].values() for c in kinds.values())
         lines += ["", f"{count} failures in the baseline no longer occur; update the baseline."]
@@ -150,7 +293,10 @@ def run(paths: list[Path], allowed_missing: set[int], proofs: Path | None) -> di
                 continue
             results = [run_case(face, case) for case in cases]
             mark_indistinct(face, results)
-            faces[key] = {"failures": face_failures(results, allowed_missing)}
+            faces[key] = {
+                "failures": face_failures(results, allowed_missing),
+                "details": face_details(results, allowed_missing),
+            }
             if path.as_posix() not in files:
                 files.append(path.as_posix())
             counts = ", ".join(f"{k} {len(v)}" for k, v in faces[key]["failures"].items())

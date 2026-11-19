@@ -75,12 +75,34 @@ def test_a_new_face_has_no_baseline():
 
 
 def test_summary_lists_new_failures_with_their_text_and_caps_the_list():
-    now = report({"F.ttf#0": {"no_conjunct": ["a", "b"]}})
+    now = report({"F.ttf#0": {"no_conjunct": ["a", "b"], "collision": ["a"]}})
     diff = health.compare(now, None, {"no_conjunct"})
     text = health.summary_markdown(now, diff, shown=1)
-    assert "| `F.ttf#0` | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 2 |" in text
-    assert "- no_conjunct: `a` ಕ್ಕ" in text
-    assert "and 1 more" in text
+    assert "| `F.ttf#0` | fail | 2 | 0 | 1 collisions |" in text
+    assert "**No conjunct, 2 strings.** In each, the consonant after the virama" in text
+    assert "\n- ಕ್ಕ (`a`)\n" in text
+
+
+def test_known_failures_pass():
+    now = report({"F.ttf#0": {"no_conjunct": ["a"]}})
+    text = health.summary_markdown(now, health.compare(now, now, {"no_conjunct"}))
+    assert "| `F.ttf#0` | pass | 0 | 1 | none |" in text
+
+
+def test_each_failure_is_explained_in_plain_words():
+    now = report({"F.ttf#0": {}})
+    now["faces"]["F.ttf#0"]["details"] = {
+        "c": {"missing": ["U+0CDC"]},
+        "a": {"same_as": ["b"], "collisions": [["ka", "virama", 0.25]]},
+    }
+    ex = health.explain
+    assert ex("missing_glyph", "c", now, "F.ttf#0").endswith(
+        "no glyph for U+0CDC KANNADA ARCHAIC SHRII."
+    )
+    assert "ಕ್ಷ" in ex("indistinct", "a", now, "F.ttf#0")
+    assert "ka and virama by 25%" in ex("collision", "a", now, "F.ttf#0")
+    assert "arkavattu" in ex("no_arkavattu", "a", now, "F.ttf#0")
+    assert "dotted circle" in ex("dotted_circle", "a", now, "F.ttf#0")
 
 
 def test_summary_says_when_nothing_is_new():
@@ -100,6 +122,13 @@ def test_patterns_expand_and_repeat_once(tmp_path):
     (tmp_path / "sub" / "B.otf").write_bytes(b"")
     got = health.expand([f"{tmp_path}/**/*.?tf {tmp_path}/A.ttf"])
     assert [p.name for p in got] == ["A.ttf", "B.otf"]
+
+
+def test_a_file_named_with_brackets_is_found(tmp_path):
+    font = tmp_path / "Noto[wdth,wght].ttf"
+    font.write_bytes(b"")
+    assert health.expand([str(font)]) == [font]
+    assert health.expand([f"{tmp_path}/*.ttf"]) == [font]
 
 
 def test_list_inputs_split_on_spaces_new_lines_and_commas():
@@ -160,3 +189,25 @@ def test_shaperglot_gate_reads_code_points_in_any_case_and_separator():
         "\u0cbd",
         "\u0cdc",
     }
+
+
+def test_missing_glyphs_are_grouped_by_character():
+    now = report({"F.ttf#0": {"missing_glyph": ["a", "b", "c"]}})
+    now["faces"]["F.ttf#0"]["details"] = {
+        "a": {"missing": ["U+0CDC"]},
+        "b": {"missing": ["U+0CDC", "U+0CF3"]},
+        "c": {"missing": ["U+0CF3"]},
+    }
+    text = health.summary_markdown(now, health.compare(now, None, {"missing_glyph"}))
+    assert "**Missing characters, 3 strings.** The font has no glyph for:" in text
+    assert "- U+0CDC KANNADA ARCHAIC SHRII, needed by 2 strings such as ಕ್ಕ" in text
+    assert "- U+0CF3 KANNADA SIGN COMBINING ANUSVARA ABOVE RIGHT, needed by 2 strings" in text
+
+
+def test_many_failures_of_a_kind_show_a_few_examples():
+    cases = [f"x{i}" for i in range(9)]
+    now = report({"F.ttf#0": {"no_arkavattu": cases}})
+    text = health.summary_markdown(now, health.compare(now, None, {"no_arkavattu"}))
+    assert text.count("should become the arkavattu") == 1
+    assert text.count("\n- ") == 7
+    assert "and 3 more" in text

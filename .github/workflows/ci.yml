@@ -57,6 +57,8 @@ jobs:
             U+0CBC
             u+0cbd
           report: out/with-baseline.json
+          proofs: out/proofs-with-baseline
+          artifact: with-baseline
       - name: The same gaps fail without one
         id: without
         continue-on-error: true
@@ -65,6 +67,8 @@ jobs:
           fonts: gari/Gari.ttf
           shaperglot: "false"
           report: out/without-baseline.json
+          proofs: out/proofs-without-baseline
+          artifact: without-baseline
       - name: Check the outcomes
         env:
           OUTCOME: ${{ steps.without.outcome }}
@@ -72,3 +76,4 @@ jobs:
           test "$OUTCOME" = failure
           python3 -c "import json,sys; r=json.load(open('out/without-baseline.json')); sys.exit(0 if r['new'] else 1)"
           python3 -c "import json,sys; r=json.load(open('out/with-baseline.json')); sys.exit(0 if not r['new'] else 1)"
+          ls out/proofs-without-baseline/*.png

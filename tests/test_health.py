@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import health  # noqa: E402
+import shaperglot_gate  # noqa: E402
 
 
 @dataclass
@@ -53,6 +54,12 @@ def test_without_baseline_every_failure_of_a_fail_on_kind_is_new():
     assert diff == {"new": {"F.ttf#0": {"no_conjunct": ["a", "b"]}}, "fixed": {}}
 
 
+def test_fixed_counts_only_kinds_that_fail_the_check():
+    base = report({"F.ttf#0": {"collision": ["a"]}})
+    now = report({"F.ttf#0": {}})
+    assert health.compare(now, base, {"no_conjunct"})["fixed"] == {}
+
+
 def test_baseline_failures_are_known_and_fixed_ones_are_reported():
     base = report({"F.ttf#0": {"no_conjunct": ["a", "c"]}})
     now = report({"F.ttf#0": {"no_conjunct": ["a", "b"]}})
@@ -83,7 +90,7 @@ def test_summary_says_when_nothing_is_new():
 
 
 def test_a_pattern_that_matches_nothing_is_an_error(tmp_path):
-    with pytest.raises(SystemExit, match="matches no file"):
+    with pytest.raises(health.UsageError, match="matches no file"):
         health.expand([str(tmp_path / "*.ttf")])
 
 
@@ -93,3 +100,63 @@ def test_patterns_expand_and_repeat_once(tmp_path):
     (tmp_path / "sub" / "B.otf").write_bytes(b"")
     got = health.expand([f"{tmp_path}/**/*.?tf {tmp_path}/A.ttf"])
     assert [p.name for p in got] == ["A.ttf", "B.otf"]
+
+
+def test_list_inputs_split_on_spaces_new_lines_and_commas():
+    assert health.parse_kinds(["missing_glyph\nno_conjunct, notdef"]) == [
+        "missing_glyph",
+        "notdef",
+        "no_conjunct",
+    ]
+    assert health.parse_codepoints(["U+0CBC\nU+0CBD"]) == {0x0CBC, 0x0CBD}
+
+
+def test_bad_inputs_exit_with_2(tmp_path, capsys):
+    assert health.main([str(tmp_path / "*.ttf")]) == 2
+    assert "matches no file" in capsys.readouterr().err
+    (tmp_path / "A.ttf").write_bytes(b"")
+    assert health.main([str(tmp_path / "A.ttf"), "--fail-on", "no_such_kind"]) == 2
+    assert health.main([str(tmp_path / "A.ttf"), "--allow-missing", "U+XYZ"]) == 2
+
+
+def test_a_file_that_is_not_a_font_exits_with_2(tmp_path, monkeypatch, capsys):
+    def boom(paths, allowed, proofs):
+        raise health.UsageError(f"{paths[0]} is not a readable font: bad")
+
+    monkeypatch.setattr(health, "run", boom)
+    (tmp_path / "README.ttf").write_text("hello")
+    assert health.main([str(tmp_path / "README.ttf")]) == 2
+    assert "not a readable font" in capsys.readouterr().err
+
+
+def test_main_exits_1_on_new_failures_and_0_with_a_baseline(tmp_path, monkeypatch):
+    font = tmp_path / "F.ttf"
+    font.write_bytes(b"")
+    key = f"{font.as_posix()}#0"
+
+    def fake(paths, allowed, proofs):
+        faces = {key: {"failures": {"no_conjunct": ["a"]}}}
+        return {"cases": 1, "texts": {"a": "x"}, "faces": faces, "files": [font.as_posix()]}
+
+    monkeypatch.setattr(health, "run", fake)
+    out = tmp_path / "r.json"
+    files = tmp_path / "files.txt"
+    assert health.main([str(font), "--report", str(out), "--kannada-files", str(files)]) == 1
+    assert files.read_text() == font.as_posix() + "\n"
+    assert (
+        health.main([str(font), "--report", str(tmp_path / "s.json"), "--baseline", str(out)]) == 0
+    )
+
+
+def test_proof_names_differ_for_the_same_stem_in_2_folders():
+    a = health.proof_name(Path("ttf/Foo.ttf"), 0)
+    b = health.proof_name(Path("otf/Foo.otf"), 0)
+    assert a != b and a.endswith("-0.png")
+
+
+def test_shaperglot_gate_reads_code_points_in_any_case_and_separator():
+    assert shaperglot_gate.allowed_chars(["u+0cbc,U+0CBD", "0CDC"]) == {
+        "\u0cbc",
+        "\u0cbd",
+        "\u0cdc",
+    }

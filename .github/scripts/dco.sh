@@ -14,7 +14,7 @@ for commit in $(git rev-list --no-merges "$base..$head"); do
     continue
   fi
   if ! git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$commit" | grep -q .; then
-    echo "::error::Commit $commit has no Signed-off-by line. See CONTRIBUTING.md: commit with git commit -s."
+    echo "::error::Commit $commit has no Signed-off-by line. See the Contributing section of README.md: commit with git commit -s."
     missing=1
   fi
 done

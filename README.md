@@ -2,7 +2,7 @@
 
 Kannada shaping tests for any font repository, on every commit.
 
-The action shapes the 2,146 test strings of [kannadi's fontqa](https://github.com/openkannada/kannadi/tree/main/tools/fontqa) in your fonts with HarfBuzz, and runs [Shaperglot](https://github.com/googlefonts/shaperglot)'s `kn_Knda` checks. It fails when a font breaks a conjunct, an arkavattu or a vowel sign, draws a dotted circle or `.notdef`, or lacks a Kannada character. A baseline lets a font with known gaps adopt it today and fail only on new problems.
+The action shapes the 2,146 test strings of [kannadi's fontqa](https://github.com/openkannada/kannadi/tree/main/tools/fontqa) in your fonts with HarfBuzz, and runs [Shaperglot](https://github.com/googlefonts/shaperglot)'s `kn_Knda` checks. It fails when a font breaks a conjunct, an arkavattu or a vowel sign, draws a dotted circle or `.notdef`, or lacks a Kannada character. A baseline of known fontqa failures lets a font with gaps adopt it today and fail only on new problems.
 
 ## Use
 
@@ -19,19 +19,19 @@ jobs:
 
 The job summary shows a table of failures per face, and lists every new failure with its text. The full JSON report is written to `font-health/report.json`; upload it with `actions/upload-artifact` to keep it.
 
-Run it on Linux: Shaperglot has no wheels for macOS on Apple Silicon.
+Run it on Linux: Shaperglot has no wheels for macOS on Apple Silicon. The action installs uv 0.12.17 with `astral-sh/setup-uv`, which later steps of the job also see.
 
 ## Inputs
 
 | Input | Default | What it does |
 |---|---|---|
-| `fonts` | required | Font files or glob patterns (TTF, OTF, TTC), separated by spaces or new lines. `**` matches folders. Faces with fewer than 40 Kannada characters are skipped. |
-| `fail-on` | `missing_glyph notdef dotted_circle no_conjunct no_arkavattu` | The fontqa failure kinds that fail the check. The others, `collision` and `indistinct`, are still reported. |
-| `baseline` | none | A report from an earlier run. Its failures are known and do not fail the check. |
+| `fonts` | required | Font files or glob patterns (TTF, OTF, TTC), separated by spaces or new lines. `**` matches folders. Paths with spaces are not supported. Fonts with fewer than 40 Kannada characters, such as a Latin companion font, are skipped by both checks. |
+| `fail-on` | `missing_glyph notdef dotted_circle no_conjunct no_arkavattu` | The fontqa failure kinds that fail the check, separated by spaces, commas or new lines. The others, `collision` and `indistinct`, are still reported. |
+| `baseline` | none | A report from an earlier run. Its fontqa failures are known and do not fail the check. |
 | `allow-missing` | none | Code points a font may lack, such as `U+0CDC`, for fontqa and Shaperglot both. |
-| `shaperglot` | `true` | Run Shaperglot's `kn_Knda` checks too. |
+| `shaperglot` | `true` | Run Shaperglot's `kn_Knda` checks too. Shaperglot reads single fonts, so TTC and OTC files are skipped. |
 | `report` | `font-health/report.json` | Where to write the JSON report. |
-| `proofs` | none | A folder for 1 proof sheet per face, with each failing string drawn large. |
+| `proofs` | none | A folder for 1 proof sheet per face, with every failing string drawn large, known or new. |
 | `kannadi-ref` | a pinned commit | The kannadi commit whose fontqa runs. |
 | `shaperglot-version` | `1.2.2` | The Shaperglot release on PyPI. |
 
@@ -61,7 +61,7 @@ Run the action once without a baseline, copy the report into the repository, and
           allow-missing: U+0CBC U+0CBD
 ```
 
-The check then fails only on failures the baseline does not list. When a fix makes a listed failure go away, the summary says so, and the baseline can shrink. The report is a valid baseline as it is; the keys it needs are `faces` and, within each face, `failures`. A face is named by the path given in `fonts` and its index in the file, as in `Gari.ttf#0`.
+The check then fails only on fontqa failures the baseline does not list. When a fix makes a listed failure go away, the summary says so, and the baseline can shrink. The baseline does not cover Shaperglot: a font whose only Shaperglot gaps are missing characters lists them in `allow-missing`, and a font with other Shaperglot gaps sets `shaperglot: false` until they are fixed. The report is a valid baseline as it is; the keys it needs are `faces` and, within each face, `failures`. A face is named by the path given in `fonts` and its index in the file, as in `Gari.ttf#0`.
 
 ## Running it locally
 

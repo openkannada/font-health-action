@@ -42,12 +42,20 @@ jobs:
           path: gari
           sparse-checkout: Gari.ttf
           sparse-checkout-cone-mode: false
-      - name: Known gaps pass with a baseline
+      - name: Known gaps pass with a baseline, with lists written as blocks
         uses: ./
         with:
-          fonts: gari/Gari.ttf
+          fonts: |
+            gari/*.ttf
           baseline: tests/data/gari-baseline.json
-          allow-missing: U+0CBC U+0CBD
+          fail-on: |
+            missing_glyph
+            notdef, dotted_circle
+            no_conjunct
+            no_arkavattu
+          allow-missing: |
+            U+0CBC
+            u+0cbd
           report: out/with-baseline.json
       - name: The same gaps fail without one
         id: without

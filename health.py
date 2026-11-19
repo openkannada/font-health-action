@@ -29,22 +29,37 @@ MIN_KANNADA = 40
 SHOWN = 25
 
 
+class UsageError(Exception):
+    """A bad input: exit status 2."""
+
+
+def tokens(items: list[str]) -> list[str]:
+    """Items split on white space, new lines and commas, as the action passes them."""
+    return [t for item in items for t in item.replace(",", " ").split()]
+
+
 def parse_codepoints(items: list[str]) -> set[int]:
-    out = set()
-    for item in items:
-        for token in item.replace(",", " ").split():
-            out.add(int(token.upper().removeprefix("U+"), 16))
-    return out
+    try:
+        return {int(t.upper().removeprefix("U+"), 16) for t in tokens(items)}
+    except ValueError as e:
+        raise UsageError(f"not a code point: {e}") from e
+
+
+def parse_kinds(items: list[str]) -> list[str]:
+    kinds = tokens(items)
+    unknown = [k for k in kinds if k not in FAILURES]
+    if unknown:
+        raise UsageError(f"unknown failure kind {', '.join(unknown)}; use {', '.join(FAILURES)}")
+    return sorted(set(kinds), key=FAILURES.index)
 
 
 def expand(patterns: list[str]) -> list[Path]:
     paths: list[Path] = []
-    for pattern in patterns:
-        for token in pattern.split():
-            matches = sorted(glob.glob(token, recursive=True)) or []
-            if not matches:
-                raise SystemExit(f"error: {token} matches no file")
-            paths += [Path(m) for m in matches if Path(m).is_file()]
+    for token in [t for p in patterns for t in p.split()]:
+        matches = sorted(glob.glob(token, recursive=True))
+        if not matches:
+            raise UsageError(f"{token} matches no file")
+        paths += [Path(m) for m in matches if Path(m).is_file()]
     return list(dict.fromkeys(paths))
 
 
@@ -74,6 +89,8 @@ def compare(report: dict, baseline: dict | None, fail_on: set[str]) -> dict:
             if added:
                 new.setdefault(face, {})[kind] = added
         for kind, cases in before.items():
+            if kind not in fail_on:
+                continue
             gone = sorted(set(cases) - set(entry["failures"].get(kind, [])))
             if gone:
                 fixed.setdefault(face, {})[kind] = gone
@@ -108,6 +125,11 @@ def summary_markdown(report: dict, diff: dict, shown: int = SHOWN) -> str:
     return "\n".join(lines) + "\n"
 
 
+def proof_name(path: Path, index: int) -> str:
+    """A file name unique to the path, so Foo.ttf and Foo.otf in 2 folders do not collide."""
+    return "_".join(path.with_suffix("").parts).lstrip("_") + f"{path.suffix}-{index}.png"
+
+
 def run(paths: list[Path], allowed_missing: set[int], proofs: Path | None) -> dict:
     from fontqa.checks import mark_indistinct, run_case
     from fontqa.kannada import all_cases
@@ -115,8 +137,13 @@ def run(paths: list[Path], allowed_missing: set[int], proofs: Path | None) -> di
 
     cases = all_cases()
     faces: dict[str, dict] = {}
+    files: list[str] = []
     for path in paths:
-        for face in faces_in(path):
+        try:
+            found = faces_in(path)
+        except Exception as e:
+            raise UsageError(f"{path} is not a readable font: {e}") from e
+        for face in found:
             key = f"{path.as_posix()}#{face.index}"
             if face.info["kannada_codepoints"] < MIN_KANNADA:
                 print(f"{key}: not a Kannada face, skipped")
@@ -124,44 +151,56 @@ def run(paths: list[Path], allowed_missing: set[int], proofs: Path | None) -> di
             results = [run_case(face, case) for case in cases]
             mark_indistinct(face, results)
             faces[key] = {"failures": face_failures(results, allowed_missing)}
+            if path.as_posix() not in files:
+                files.append(path.as_posix())
             counts = ", ".join(f"{k} {len(v)}" for k, v in faces[key]["failures"].items())
             print(f"{key}: {counts or 'all pass'}")
             if proofs:
                 from fontqa.proof import sheet
 
-                sheet(face, results, proofs / f"{path.stem}-{face.index}.png", None)
-    return {"cases": len(cases), "texts": {c.id: c.text for c in cases}, "faces": faces}
+                sheet(face, results, proofs / proof_name(path, face.index), None)
+    texts = {c.id: c.text for c in cases}
+    return {"cases": len(cases), "texts": texts, "faces": faces, "files": files}
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("fonts", nargs="+", help="font files or glob patterns")
-    p.add_argument("--fail-on", nargs="*", default=list(DEFAULT_FAIL_ON), choices=FAILURES)
+    p.add_argument("--fail-on", nargs="*", default=list(DEFAULT_FAIL_ON), help=", ".join(FAILURES))
     p.add_argument("--baseline", type=Path, help="a report whose failures are known")
     p.add_argument("--allow-missing", nargs="*", default=[], help="code points, e.g. U+0CDC")
     p.add_argument("--report", type=Path, default=Path("font-health/report.json"))
     p.add_argument("--summary", type=Path, help="append the Markdown summary to this file")
     p.add_argument("--proofs", type=Path, help="write a proof sheet per face here")
     p.add_argument("--fontqa-ref", default="unknown", help="kannadi commit, for the report")
+    p.add_argument("--kannada-files", type=Path, help="write the files with a Kannada face here")
     args = p.parse_args(argv)
+    try:
+        return check(args)
+    except UsageError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
+
+def check(args: argparse.Namespace) -> int:
     paths = expand(args.fonts)
     if not paths:
-        print("error: no font files", file=sys.stderr)
-        return 2
+        raise UsageError("no font files")
+    fail_on = parse_kinds(args.fail_on)
     allowed = parse_codepoints(args.allow_missing)
     report = run(paths, allowed, args.proofs)
     report = {
         "fontqa": args.fontqa_ref,
-        "fail_on": sorted(args.fail_on, key=FAILURES.index),
+        "fail_on": fail_on,
         "allow_missing": [f"U+{c:04X}" for c in sorted(allowed)],
         **report,
     }
     if not report["faces"]:
-        print("error: no Kannada face in the given fonts", file=sys.stderr)
-        return 2
+        raise UsageError("no Kannada face in the given fonts")
+    if args.kannada_files:
+        args.kannada_files.write_text("".join(f + "\n" for f in report["files"]))
     baseline = json.loads(args.baseline.read_text()) if args.baseline else None
-    diff = compare(report, baseline, set(args.fail_on))
+    diff = compare(report, baseline, set(fail_on))
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps({**report, **diff}, ensure_ascii=False, indent=1) + "\n")
     markdown = summary_markdown(report, diff)

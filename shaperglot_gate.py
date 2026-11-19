@@ -15,15 +15,21 @@ from __future__ import annotations
 
 import sys
 
-from shaperglot import Checker, Languages
-
 LANGUAGE = "kn_Knda"
 CODEPOINT_CHECK = "Mandatory orthography codepoints"
 
 
+def allowed_chars(listed: list[str]) -> set[str]:
+    """Characters from code points such as U+0CBC, separated by spaces or commas."""
+    codes = " ".join(listed).replace(",", " ").split()
+    return {chr(int(code.upper().removeprefix("U+"), 16)) for code in codes}
+
+
 def main(argv: list[str]) -> int:
+    from shaperglot import Checker, Languages
+
     font, *listed = argv
-    allowed = {chr(int(code.removeprefix("U+"), 16)) for code in listed}
+    allowed = allowed_chars(listed)
     report = Checker(font).check(Languages()[LANGUAGE])
     verdict = "supported" if report.is_success else "not fully supported"
     print(f"Shaperglot {LANGUAGE}: {verdict}, score {report.score:.1f}%")

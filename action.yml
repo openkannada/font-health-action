@@ -29,7 +29,10 @@ inputs:
     default: font-health/report.json
   proofs:
     description: A folder for 1 proof sheet per face, showing the failing strings. Empty for none.
-    default: ""
+    default: font-health/proofs
+  artifact:
+    description: Name of the artifact that holds the report and the proof sheets. Empty for none.
+    default: font-health
   kannadi-ref:
     description: The commit of openkannada/kannadi whose fontqa is used.
     default: 54200595f5c1cded6455dcbf691f0f5340f75586
@@ -69,6 +72,7 @@ runs:
 
     # Inputs reach Python as single arguments; it splits them on spaces, new lines and commas.
     - name: Shape the test strings
+      id: shape
       shell: bash
       env:
         PROJECT: ${{ steps.fontqa.outputs.project }}
@@ -81,6 +85,7 @@ runs:
         REPORT: ${{ inputs.report }}
         PROOFS: ${{ inputs.proofs }}
       run: |
+        rm -f "$FILES"
         args=(--report "$REPORT" --summary "$GITHUB_STEP_SUMMARY" --fontqa-ref "$FONTQA_REF")
         args+=(--kannada-files "$FILES" --fail-on "$FAIL_ON" --allow-missing "$ALLOW")
         if [[ -n "$BASELINE" ]]; then args+=(--baseline "$BASELINE"); fi
@@ -88,7 +93,7 @@ runs:
         uv run -q --project "$PROJECT" --no-dev python "$GITHUB_ACTION_PATH/health.py" "$FONTS" "${args[@]}"
 
     - name: Run Shaperglot
-      if: ${{ !cancelled() && inputs.shaperglot == 'true' && steps.fontqa.outcome == 'success' }}
+      if: ${{ !cancelled() && inputs.shaperglot == 'true' && steps.shape.outcome != 'skipped' }}
       shell: bash
       env:
         FILES: ${{ steps.fontqa.outputs.files }}
@@ -96,7 +101,7 @@ runs:
         VERSION: ${{ inputs.shaperglot-version }}
       run: |
         if [[ ! -s "$FILES" ]]; then
-          echo "No Kannada font was found, so Shaperglot did not run."
+          echo "The shaping step stopped before it found a Kannada font; see its error. Shaperglot did not run."
           exit 1
         fi
         status=0
@@ -107,7 +112,7 @@ runs:
             printf -- '- `%s`: skipped, a font collection\n' "$font" >> "$GITHUB_STEP_SUMMARY"
             continue
           fi
-          if out=$(uvx -q --from "shaperglot==$VERSION" python "$GITHUB_ACTION_PATH/shaperglot_gate.py" "$font" "$ALLOW"); then
+          if out=$(uvx -q --from "shaperglot==$VERSION" python "$GITHUB_ACTION_PATH/shaperglot_gate.py" "$font" "$ALLOW" < /dev/null); then
             mark=pass
           else
             mark=fail
@@ -117,3 +122,13 @@ runs:
           printf -- '- `%s` (%s): %s\n' "$font" "$mark" "$(head -1 <<< "$out")" >> "$GITHUB_STEP_SUMMARY"
         done < "$FILES"
         exit "$status"
+
+    - name: Keep the report and proof sheets
+      if: ${{ !cancelled() && inputs.artifact != '' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact }}
+        path: |
+          ${{ inputs.report }}
+          ${{ inputs.proofs }}
+        if-no-files-found: ignore

@@ -2,11 +2,12 @@
 
 Kannada shaping tests for any font repository, on every commit.
 
-The action shapes the 2,146 test strings of [kannadi's fontqa](https://github.com/openkannada/kannadi/tree/main/tools/fontqa) in your fonts with HarfBuzz, and runs [Shaperglot](https://github.com/googlefonts/shaperglot)'s `kn_Knda` checks. It fails when a font breaks a conjunct, an arkavattu or a vowel sign, draws a dotted circle or `.notdef`, or lacks a Kannada character. A baseline of known fontqa failures lets a font with gaps adopt it today and fail only on new problems.
+The action shapes 2,146 Kannada test strings in your fonts with HarfBuzz, the shaping engine in Chrome, Firefox, Android and LibreOffice, and runs [Shaperglot](https://github.com/googlefonts/shaperglot)'s `kn_Knda` checks. It fails when a font cannot form a conjunct or the arkavattu, puts a dotted circle in a word, or lacks a Kannada character. Each failure is reported in plain words, with the string, what a correct font does, and what yours did.
 
-## Use
+## Quick start
 
 ```yaml
+on: [push, pull_request]
 jobs:
   font-health:
     runs-on: ubuntu-24.04
@@ -17,41 +18,33 @@ jobs:
           fonts: fonts/ttf/*.ttf
 ```
 
-The job summary shows a table of failures per face, and lists every new failure with its text. The full JSON report is written to `font-health/report.json`; upload it with `actions/upload-artifact` to keep it.
+A run takes about 30 seconds to set up and 1 to 2 seconds per font.
 
-Run it on Linux: Shaperglot has no wheels for macOS on Apple Silicon. The action installs uv 0.12.17 with `astral-sh/setup-uv`, which later steps of the job also see.
+## What it checks
 
-## Inputs
+The strings come from [kannadi's fontqa](https://github.com/openkannada/kannadi/tree/main/tools/fontqa): every consonant with every vowel sign, every consonant cluster, the arkavattu on every consonant, clusters with vowel signs, the Old Kannada letters and the newest characters (ೝ, ೳ, U+0CDC). A string fails for 1 of these reasons:
 
-| Input | Default | What it does |
-|---|---|---|
-| `fonts` | required | Font files or glob patterns (TTF, OTF, TTC), separated by spaces or new lines. `**` matches folders. Paths with spaces are not supported. Fonts with fewer than 40 Kannada characters, such as a Latin companion font, are skipped by both checks. |
-| `fail-on` | `missing_glyph notdef dotted_circle no_conjunct no_arkavattu` | The fontqa failure kinds that fail the check, separated by spaces, commas or new lines. The others, `collision` and `indistinct`, are still reported. |
-| `baseline` | none | A report from an earlier run. Its fontqa failures are known and do not fail the check. |
-| `allow-missing` | none | Code points a font may lack, such as `U+0CDC`, for fontqa and Shaperglot both. |
-| `shaperglot` | `true` | Run Shaperglot's `kn_Knda` checks too. Shaperglot reads single fonts, so TTC and OTC files are skipped. |
-| `report` | `font-health/report.json` | Where to write the JSON report. |
-| `proofs` | none | A folder for 1 proof sheet per face, with every failing string drawn large, known or new. |
-| `kannadi-ref` | a pinned commit | The kannadi commit whose fontqa runs. |
-| `shaperglot-version` | `1.2.2` | The Shaperglot release on PyPI. |
-
-## Failure kinds
-
-| Kind | Meaning |
+| Failure | What a correct font does, and what went wrong |
 |---|---|
-| `missing_glyph` | A character in the string has no glyph, or a glyph with no ink |
-| `notdef` | The shaped output holds glyph 0 although every character is mapped |
-| `dotted_circle` | HarfBuzz inserted a dotted circle, so the font rejected the sequence |
-| `no_conjunct` | Consonant + virama + consonant shapes like the same string with a ZWNJ: no subscript formed |
-| `no_arkavattu` | ರ + virama + consonant does not form the arkavattu |
-| `collision` | A mark overlaps another glyph by more than 3% of the smaller glyph's ink |
-| `indistinct` | 2 different strings render with exactly the same ink |
+| no conjunct | The consonant after a virama is drawn as a subscript (ottu). The font drew a visible virama and 2 letters. |
+| no arkavattu | ರ with a virama before a consonant becomes the arkavattu. The font kept ರ as a full letter. |
+| dotted circle | Every sign attaches to its letter. The shaper could not attach one and drew a dotted circle. |
+| .notdef | Every character is drawn. The shaped text holds the missing-glyph box. |
+| missing character | The font has a glyph, with ink, for each character in the string. |
+| collision | Marks do not run into other glyphs. A mark overlaps a glyph other than its base letter by more than 3% of the smaller one's ink. |
+| strings drawn alike | Different text looks different. 2 strings were drawn with exactly the same ink, such as ೄ drawn as ೃ. |
 
-fontqa's README describes the 7 groups of test strings and how each check works.
+The first 5 fail the check by default. Collisions and look-alikes are reported for a person to judge, since some designs join strokes on purpose.
+
+## Reading the results
+
+The job summary has a table with 1 row per font face: pass or fail, new failures, known failures, and other findings. Under it, each kind of new failure gets 1 paragraph with examples, and missing characters are listed by character with how many strings need each.
+
+The artifact `font-health` holds the full JSON report and 1 proof sheet per face. A proof sheet draws up to 40 failing strings of each kind large in your font, known failures included, with the overlap boxed in red for collisions. The report lists every failing string by id, kind and detail, and works as a baseline.
 
 ## Adopting it with known gaps
 
-Run the action once without a baseline, copy the report into the repository, and pass it as `baseline`:
+Most fonts have gaps today. Download the report from a first run, commit it, and pass it as `baseline`:
 
 ```yaml
       - uses: openkannada/font-health-action@v1
@@ -61,21 +54,47 @@ Run the action once without a baseline, copy the report into the repository, and
           allow-missing: U+0CBC U+0CBD
 ```
 
-The check then fails only on fontqa failures the baseline does not list. When a fix makes a listed failure go away, the summary says so, and the baseline can shrink. The baseline does not cover Shaperglot: a font whose only Shaperglot gaps are missing characters lists them in `allow-missing`, and a font with other Shaperglot gaps sets `shaperglot: false` until they are fixed. The report is a valid baseline as it is; the keys it needs are `faces` and, within each face, `failures`. A face is named by the path given in `fonts` and its index in the file, as in `Gari.ttf#0`.
+The check then fails only on failures the baseline does not list, and the summary says when a listed failure is fixed, so the baseline can shrink. A face is named by its path exactly as the `fonts` pattern matched it, and its index in the file, as in `Gari.ttf#0`; keep the same pattern, relative to the repository, between the run that made the baseline and later runs. The baseline covers the shaping strings only; for Shaperglot, list characters a font may lack in `allow-missing`, or set `shaperglot: false` until its other gaps are fixed.
+
+## Inputs
+
+| Input | Default | What it does |
+|---|---|---|
+| `fonts` | required | Font files or glob patterns (TTF, OTF, TTC), separated by spaces or new lines. `**` matches folders. A file that exists is taken as named, so `Foo[wght].ttf` works. Paths with spaces do not. Fonts with fewer than 40 Kannada characters, such as a Latin companion font, are skipped. |
+| `fail-on` | `missing_glyph notdef dotted_circle no_conjunct no_arkavattu` | The failure kinds that fail the check, separated by spaces, commas or new lines. The others are `collision` and `indistinct`. |
+| `baseline` | none | A report from an earlier run. Its failures are known and do not fail the check. |
+| `allow-missing` | none | Code points a font may lack, such as `U+0CDC`, for both checks. |
+| `shaperglot` | `true` | Run Shaperglot's `kn_Knda` checks too. Font collections (TTC) are skipped there. |
+| `report` | `font-health/report.json` | Where to write the JSON report. |
+| `proofs` | `font-health/proofs` | Where to write the proof sheets. Empty for none. |
+| `artifact` | `font-health` | Name of the artifact with the report and proof sheets. Empty for none. |
+| `kannadi-ref` | a pinned commit | The kannadi commit whose test strings run. |
+| `shaperglot-version` | `1.2.2` | The Shaperglot release on PyPI. |
+
+To run the action more than once in a workflow, as in a matrix of font families, give each use its own `artifact`, `report` and `proofs`: artifact names must be unique in a run, and a second use would otherwise overwrite the first one's files.
+
+## Outputs
+
+| Output | What it is |
+|---|---|
+| `report` | The path of the JSON report. |
+
+Run it on Linux: Shaperglot has no wheels for macOS on Apple Silicon. The action installs uv 0.12.17 with `astral-sh/setup-uv`, which later steps of the job also see.
 
 ## Running it locally
 
 ```bash
+git clone https://github.com/openkannada/font-health-action
 git clone https://github.com/openkannada/kannadi
 uv sync --project kannadi/tools/fontqa
-uv run --project kannadi/tools/fontqa python health.py MyFont.ttf --baseline baseline.json
+uv run --project kannadi/tools/fontqa python font-health-action/health.py MyFont.ttf --proofs proofs
 ```
 
-`health.py --help` lists the options. It exits 1 when a failure is new and 2 when no Kannada font was found.
+`health.py --help` lists the options. It exits 0 when nothing new fails, 1 when something does, and 2 for bad input such as a pattern that matches no file.
 
 ## Contributing
 
-Every commit needs a `Signed-off-by` line (`git commit -s`) under the [Developer Certificate of Origin](https://developercertificate.org/). Changes to the test strings belong in kannadi's fontqa; this repository only runs them.
+Every commit needs a `Signed-off-by` line (`git commit -s`) under the [Developer Certificate of Origin](https://developercertificate.org/). Changes to the test strings belong in kannadi's fontqa; this repository runs them.
 
 ## License
 

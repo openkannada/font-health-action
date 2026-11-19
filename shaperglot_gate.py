@@ -5,7 +5,7 @@ mandatory codepoint check missing characters listed as allowed.
 
 Runs in Shaperglot's own environment, since its wheels are not built for every platform:
 
-    uvx --from shaperglot==1.2.2 python tools/shaperglot_gate.py FONT [U+0CBC ...]
+    uvx --from shaperglot==1.2.2 python shaperglot_gate.py FONT [U+0CBC ...]
 
 Shaperglot's command line prints "nearly supports" even for a font with nothing left to
 fix, so this reads the result through its Python API.

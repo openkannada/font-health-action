@@ -89,20 +89,25 @@ def test_known_failures_pass():
     assert "| `F.ttf#0` | pass | 0 | 1 | none |" in text
 
 
-def test_each_failure_is_explained_in_plain_words():
-    now = report({"F.ttf#0": {}})
+def test_each_failure_kind_is_explained_once_with_specific_examples():
+    kinds = ["dotted_circle", "notdef", "no_conjunct", "no_arkavattu", "collision", "indistinct"]
+    now = report({"F.ttf#0": {k: ["a"] for k in kinds}})
     now["faces"]["F.ttf#0"]["details"] = {
-        "c": {"missing": ["U+0CDC"]},
-        "a": {"same_as": ["b"], "collisions": [["ka", "virama", 0.25]]},
+        "a": {"same_as": ["ಕೃ"], "collisions": [["ka", "virama", 0.25]]}
     }
-    ex = health.explain
-    assert ex("missing_glyph", "c", now, "F.ttf#0").endswith(
-        "no glyph for U+0CDC KANNADA ARCHAIC SHRII."
-    )
-    assert "ಕ್ಷ" in ex("indistinct", "a", now, "F.ttf#0")
-    assert "ka and virama by 25%" in ex("collision", "a", now, "F.ttf#0")
-    assert "arkavattu" in ex("no_arkavattu", "a", now, "F.ttf#0")
-    assert "dotted circle" in ex("dotted_circle", "a", now, "F.ttf#0")
+    text = health.summary_markdown(now, health.compare(now, None, set(kinds)))
+    for kind in kinds:
+        assert health.MEANING[kind] in text
+    assert "- ಕ್ಕ (`a`): ka and virama by 25%" in text
+    assert "- ಕ್ಕ (`a`) is drawn like ಕೃ" in text
+    assert "**Dotted circles, 1 string.**" in text
+    assert text.index("Dotted circles") < text.index("No conjunct") < text.index("Collisions")
+
+
+def test_proof_names_stay_inside_the_folder_for_absolute_paths(tmp_path):
+    name = health.proof_name(Path("/home/runner/work/fonts/Foo[wght].ttf"), 2)
+    assert name == "home_runner_work_fonts_Foo[wght].ttf-2.png"
+    assert (tmp_path / name).parent == tmp_path
 
 
 def test_summary_says_when_nothing_is_new():
@@ -218,7 +223,7 @@ def test_missing_glyphs_are_grouped_by_character():
         "c": {"missing": ["U+0CF3"]},
     }
     text = health.summary_markdown(now, health.compare(now, None, {"missing_glyph"}))
-    assert "**Missing characters, 3 strings.** The font has no glyph for:" in text
+    assert "**Missing characters, 3 strings.** The font has no glyph with ink for:" in text
     assert "- U+0CDC KANNADA ARCHAIC SHRII, needed by 2 strings such as ಕ್ಕ" in text
     assert "- U+0CF3 KANNADA SIGN COMBINING ANUSVARA ABOVE RIGHT, needed by 2 strings" in text
 

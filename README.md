@@ -31,7 +31,7 @@ The strings come from [kannadi's fontqa](https://github.com/openkannada/kannadi/
 | dotted circle | Every sign attaches to its letter. The shaper could not attach one and drew a dotted circle. |
 | .notdef | Every character is drawn. The shaped text holds the missing-glyph box. |
 | missing character | The font has a glyph, with ink, for each character in the string. |
-| collision | Marks do not run into other glyphs. 2 glyphs overlap by more than 3% of the smaller one's ink. |
+| collision | Marks do not run into other glyphs. A mark overlaps a glyph other than its base letter by more than 3% of the smaller one's ink. |
 | strings drawn alike | Different text looks different. 2 strings were drawn with exactly the same ink, such as ೄ drawn as ೃ. |
 
 The first 5 fail the check by default. Collisions and look-alikes are reported for a person to judge, since some designs join strokes on purpose.
@@ -40,7 +40,7 @@ The first 5 fail the check by default. Collisions and look-alikes are reported f
 
 The job summary has a table with 1 row per font face: pass or fail, new failures, known failures, and other findings. Under it, each kind of new failure gets 1 paragraph with examples, and missing characters are listed by character with how many strings need each.
 
-The artifact `font-health` holds the full JSON report and 1 proof sheet per face: every failing string drawn large in your font, with the overlap boxed in red for collisions. The report lists every failing string by id, kind and detail, and works as a baseline.
+The artifact `font-health` holds the full JSON report and 1 proof sheet per face. A proof sheet draws up to 40 failing strings of each kind large in your font, known failures included, with the overlap boxed in red for collisions. The report lists every failing string by id, kind and detail, and works as a baseline.
 
 ## Adopting it with known gaps
 
@@ -54,7 +54,7 @@ Most fonts have gaps today. Download the report from a first run, commit it, and
           allow-missing: U+0CBC U+0CBD
 ```
 
-The check then fails only on failures the baseline does not list, and the summary says when a listed failure is fixed, so the baseline can shrink. A face is named by the path in `fonts` and its index in the file, as in `Gari.ttf#0`. The baseline covers the shaping strings only; for Shaperglot, list characters a font may lack in `allow-missing`, or set `shaperglot: false` until its other gaps are fixed.
+The check then fails only on failures the baseline does not list, and the summary says when a listed failure is fixed, so the baseline can shrink. A face is named by its path exactly as the `fonts` pattern matched it, and its index in the file, as in `Gari.ttf#0`; keep the same pattern, relative to the repository, between the run that made the baseline and later runs. The baseline covers the shaping strings only; for Shaperglot, list characters a font may lack in `allow-missing`, or set `shaperglot: false` until its other gaps are fixed.
 
 ## Inputs
 
@@ -67,9 +67,11 @@ The check then fails only on failures the baseline does not list, and the summar
 | `shaperglot` | `true` | Run Shaperglot's `kn_Knda` checks too. Font collections (TTC) are skipped there. |
 | `report` | `font-health/report.json` | Where to write the JSON report. |
 | `proofs` | `font-health/proofs` | Where to write the proof sheets. Empty for none. |
-| `artifact` | `font-health` | Name of the artifact with the report and proof sheets. Empty for none. Give each use a different name if a job runs the action twice. |
+| `artifact` | `font-health` | Name of the artifact with the report and proof sheets. Empty for none. |
 | `kannadi-ref` | a pinned commit | The kannadi commit whose test strings run. |
 | `shaperglot-version` | `1.2.2` | The Shaperglot release on PyPI. |
+
+To run the action more than once in a workflow, as in a matrix of font families, give each use its own `artifact`, `report` and `proofs`: artifact names must be unique in a run, and a second use would otherwise overwrite the first one's files.
 
 ## Outputs
 
@@ -82,9 +84,10 @@ Run it on Linux: Shaperglot has no wheels for macOS on Apple Silicon. The action
 ## Running it locally
 
 ```bash
+git clone https://github.com/openkannada/font-health-action
 git clone https://github.com/openkannada/kannadi
 uv sync --project kannadi/tools/fontqa
-uv run --project kannadi/tools/fontqa python health.py MyFont.ttf --proofs proofs
+uv run --project kannadi/tools/fontqa python font-health-action/health.py MyFont.ttf --proofs proofs
 ```
 
 `health.py --help` lists the options. It exits 0 when nothing new fails, 1 when something does, and 2 for bad input such as a pattern that matches no file.

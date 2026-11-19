@@ -104,39 +104,6 @@ def char_name(code: str) -> str:
     return f"{code} {NAMES.get(cp) or unicodedata.name(chr(cp), '')}".strip()
 
 
-def explain(kind: str, case: str, report: dict, face: str) -> str:
-    """1 failure in plain words: the string, what a correct font does, what this one did."""
-    text = report["texts"].get(case, "")
-    detail = report["faces"][face].get("details", {}).get(case, {})
-    shown = f"{text} (`{case}`)"
-    if kind == "missing_glyph":
-        names = ", ".join(char_name(c) for c in detail.get("missing", [])) or "a character"
-        return f"{shown}: the font has no glyph for {names}."
-    if kind == "no_conjunct":
-        return (
-            f"{shown}: the consonant after the virama should be drawn as a subscript; "
-            "the font draws the same glyphs as with a ZWNJ, a visible virama and 2 letters."
-        )
-    if kind == "no_arkavattu":
-        return (
-            f"{shown}: ರ with a virama before a consonant should become the arkavattu; "
-            "the font keeps ರ as a full letter, with a visible virama or the consonant below it."
-        )
-    if kind == "dotted_circle":
-        return f"{shown}: the shaper could not attach a sign and drew a dotted circle."
-    if kind == "notdef":
-        return (
-            f"{shown}: the shaped text holds the .notdef glyph, though every character is mapped."
-        )
-    if kind == "collision":
-        parts = [f"{a} and {b} by {share:.0%}" for a, b, share in detail.get("collisions", [])]
-        return f"{shown}: glyphs overlap ({'; '.join(parts) or 'see the proof sheet'})."
-    if kind == "indistinct":
-        others = ", ".join(report["texts"].get(o, o) for o in detail.get("same_as", []))
-        return f"{shown}: drawn with exactly the same ink as {others or 'another string'}."
-    return f"{shown}: {kind}."
-
-
 KIND_WORDS = {
     "missing_glyph": "missing characters",
     "notdef": ".notdef glyphs",
@@ -187,10 +154,15 @@ MEANING = {
     "the font draws the same glyphs as with a ZWNJ: a visible virama and 2 letters.",
     "no_arkavattu": "ರ with a virama before a consonant should become the arkavattu; "
     "the font keeps ರ as a full letter, with a visible virama or the consonant below it.",
-    "collision": "a mark overlaps another glyph by more than 3% of the smaller glyph's ink.",
+    "collision": "a mark overlaps a glyph other than its base letter by more than 3% of "
+    "the smaller glyph's ink; the glyphs are named as the font names them.",
     "indistinct": "the string is drawn with exactly the same ink as a different string.",
 }
 EXAMPLES = 6
+
+
+def strings(n: int) -> str:
+    return f"{n} string" + ("" if n == 1 else "s")
 
 
 def example(kind: str, case: str, report: dict, face: str) -> str:
@@ -201,7 +173,7 @@ def example(kind: str, case: str, report: dict, face: str) -> str:
         parts = "; ".join(f"{a} and {b} by {share:.0%}" for a, b, share in detail["collisions"])
         return f"{text} (`{case}`): {parts}"
     if kind == "indistinct" and detail.get("same_as"):
-        others = ", ".join(report["texts"].get(o, o) for o in detail["same_as"])
+        others = ", ".join(detail["same_as"])
         return f"{text} (`{case}`) is drawn like {others}"
     return f"{text} (`{case}`)"
 
@@ -212,26 +184,23 @@ def new_failures(report: dict, face: str, kinds: dict[str, list[str]], shown: in
     details = report["faces"][face].get("details", {})
     for kind in sorted(kinds, key=ORDER.index):
         cases = kinds[kind]
-        title = f"**{KIND_WORDS[kind].capitalize()}, {len(cases)} strings.**"
+        title = f"**{KIND_WORDS[kind].capitalize()}, {strings(len(cases))}.**"
         if kind == "missing_glyph":
             by_char: dict[str, list[str]] = {}
             for case in cases:
                 for code in details.get(case, {}).get("missing", []):
                     by_char.setdefault(code, []).append(case)
-            out.append(f"{title} The font has no glyph for:")
+            out.append(f"{title} The font has no glyph with ink for:")
             for code, where in sorted(by_char.items(), key=lambda kv: -len(kv[1]))[:shown]:
                 sample = report["texts"].get(where[0], "")
-                n = f"{len(where)} string" + ("s" if len(where) > 1 else "")
-                out.append(f"- {char_name(code)}, needed by {n} such as {sample}")
+                out.append(f"- {char_name(code)}, needed by {strings(len(where))} such as {sample}")
         else:
             out.append(f"{title} In each, {MEANING[kind]}")
             out += [
                 f"- {example(kind, case, report, face)}" for case in cases[: min(shown, EXAMPLES)]
             ]
             if len(cases) > EXAMPLES:
-                out.append(
-                    f"- and {len(cases) - EXAMPLES} more, in the JSON report and the proof sheet"
-                )
+                out.append(f"- and {len(cases) - EXAMPLES} more, in the JSON report")
         out.append("")
     return out
 
@@ -270,7 +239,8 @@ def summary_markdown(report: dict, diff: dict, shown: int = SHOWN) -> str:
 
 def proof_name(path: Path, index: int) -> str:
     """A file name unique to the path, so Foo.ttf and Foo.otf in 2 folders do not collide."""
-    return "_".join(path.with_suffix("").parts).lstrip("_") + f"{path.suffix}-{index}.png"
+    parts = path.with_suffix("").parts[1:] if path.is_absolute() else path.with_suffix("").parts
+    return "_".join(p for p in parts if p not in ("", ".", "..")) + f"{path.suffix}-{index}.png"
 
 
 def run(paths: list[Path], allowed_missing: set[int], proofs: Path | None) -> dict:
@@ -329,6 +299,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def check(args: argparse.Namespace) -> int:
+    baseline = None
+    if args.baseline:
+        try:
+            baseline = json.loads(args.baseline.read_text())
+        except (OSError, ValueError) as e:
+            raise UsageError(f"cannot read the baseline {args.baseline}: {e}") from e
     paths = expand(args.fonts)
     if not paths:
         raise UsageError("no font files")
@@ -345,12 +321,6 @@ def check(args: argparse.Namespace) -> int:
         raise UsageError("no Kannada face in the given fonts")
     if args.kannada_files:
         args.kannada_files.write_text("".join(f + "\n" for f in report["files"]))
-    baseline = None
-    if args.baseline:
-        try:
-            baseline = json.loads(args.baseline.read_text())
-        except (OSError, ValueError) as e:
-            raise UsageError(f"cannot read the baseline {args.baseline}: {e}") from e
     diff = compare(report, baseline, set(fail_on))
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps({**report, **diff}, ensure_ascii=False, indent=1) + "\n")

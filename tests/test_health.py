@@ -148,6 +148,25 @@ def test_bad_inputs_exit_with_2(tmp_path, capsys):
     assert health.main([str(tmp_path / "A.ttf"), "--allow-missing", "U+XYZ"]) == 2
 
 
+def test_a_missing_baseline_exits_with_2(tmp_path, monkeypatch, capsys):
+    font = tmp_path / "F.ttf"
+    font.write_bytes(b"")
+
+    def fake(paths, allowed, proofs):
+        return {"cases": 1, "texts": {}, "faces": {"F.ttf#0": {"failures": {}}}, "files": []}
+
+    monkeypatch.setattr(health, "run", fake)
+    args = [
+        str(font),
+        "--report",
+        str(tmp_path / "r.json"),
+        "--baseline",
+        str(tmp_path / "no.json"),
+    ]
+    assert health.main(args) == 2
+    assert "cannot read the baseline" in capsys.readouterr().err
+
+
 def test_a_file_that_is_not_a_font_exits_with_2(tmp_path, monkeypatch, capsys):
     def boom(paths, allowed, proofs):
         raise health.UsageError(f"{paths[0]} is not a readable font: bad")

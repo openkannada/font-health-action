@@ -345,7 +345,12 @@ def check(args: argparse.Namespace) -> int:
         raise UsageError("no Kannada face in the given fonts")
     if args.kannada_files:
         args.kannada_files.write_text("".join(f + "\n" for f in report["files"]))
-    baseline = json.loads(args.baseline.read_text()) if args.baseline else None
+    baseline = None
+    if args.baseline:
+        try:
+            baseline = json.loads(args.baseline.read_text())
+        except (OSError, ValueError) as e:
+            raise UsageError(f"cannot read the baseline {args.baseline}: {e}") from e
     diff = compare(report, baseline, set(fail_on))
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps({**report, **diff}, ensure_ascii=False, indent=1) + "\n")

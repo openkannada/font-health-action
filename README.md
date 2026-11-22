@@ -100,7 +100,7 @@ Every commit needs a `Signed-off-by` line (`git commit -s`) under the [Developer
 
 - [kannadi](https://github.com/openkannada/kannadi): the source of the test strings, in `tools/fontqa`.
 - [Neha Sans and Neha Serif](https://github.com/openkannada/noto-kannada-fork) and [Gari](https://github.com/openkannada/gari-font): Kannada fonts that run this action on every commit. Download them at [openkannada.org/fonts](https://openkannada.org/fonts/).
-- [Shaperglot](https://github.com/googlefonts/shaperglot): Google Fonts' language-support checker, whose main branch has Kannada conjunct and arkavattu checks since 1.2.2.
+- [Shaperglot](https://github.com/googlefonts/shaperglot): Google Fonts' language-support checker, whose main branch added Kannada conjunct and arkavattu checks after release 1.2.2.
 
 ## License
 

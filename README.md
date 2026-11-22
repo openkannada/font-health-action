@@ -94,7 +94,13 @@ uv run --project kannadi/tools/fontqa python font-health-action/health.py MyFont
 
 ## Contributing
 
-Every commit needs a `Signed-off-by` line (`git commit -s`) under the [Developer Certificate of Origin](https://developercertificate.org/). Changes to the test strings belong in kannadi's fontqa; this repository runs them.
+Every commit needs a `Signed-off-by` line (`git commit -s`) under the [Developer Certificate of Origin](https://developercertificate.org/). The test strings live in kannadi's fontqa, so send changes to them there; this repository runs them. See the [Open Kannada contributing guide](https://github.com/openkannada/.github/blob/main/CONTRIBUTING.md) and the [changelog](CHANGELOG.md).
+
+## Related
+
+- [kannadi](https://github.com/openkannada/kannadi): the source of the test strings, in `tools/fontqa`.
+- [Neha Sans and Neha Serif](https://github.com/openkannada/noto-kannada-fork) and [Gari](https://github.com/openkannada/gari-font): Kannada fonts that run this action on every commit. Download them at [openkannada.org/fonts](https://openkannada.org/fonts/).
+- [Shaperglot](https://github.com/googlefonts/shaperglot): Google Fonts' language-support checker, which now includes Kannada conjunct and arkavattu checks.
 
 ## License
 
